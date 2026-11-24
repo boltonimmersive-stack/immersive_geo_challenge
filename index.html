@@ -6,6 +6,44 @@
 
   <title>Immersive Geo Challenge V2</title>
 
+  <!-- Choose the entry screen before any external files or game controls load. -->
+  <script>
+    (() => {
+      const entryParams = new URLSearchParams(location.search);
+      const entry = entryParams.has("join") ? "join" :
+        /^\d{6}$/.test(entryParams.get("host") || "") ? "host" : "";
+      if (!entry) return;
+      document.documentElement.dataset.entry = entry;
+      // Keep a useful, safe screen even if a dependency is slow or unavailable.
+      setTimeout(() => {
+        const screen = document.getElementById("teamBoot");
+        if (!screen || screen.hidden) return;
+        document.getElementById("teamBootMessage").textContent =
+          "Still loading… Check your internet connection, then try reloading.";
+        document.getElementById("teamBootRetry").hidden = false;
+      }, 12000);
+    })();
+  </script>
+  <style>
+    /* These rules must precede the network-loaded styles and scripts. */
+    html[data-entry] .app,
+    html[data-entry] .overlay { display: none !important; }
+    #teamBoot { display: none; }
+    html[data-entry] #teamBoot:not([hidden]) {
+      position: fixed; inset: 0; z-index: 10000;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px; background: #081327; color: #fff;
+      text-align: center; font-family: system-ui, sans-serif;
+    }
+    #teamBoot h1 { margin: 0 0 12px; font-size: clamp(1.5rem, 5vw, 2rem); }
+    #teamBoot p { max-width: 32em; margin: 0 auto; line-height: 1.6; color: #c5d5ec; }
+    #teamBoot button {
+      margin-top: 20px; padding: 12px 20px; min-height: 46px;
+      border: 0; border-radius: 9px; font: inherit; font-weight: 700;
+      background: #61e1cd; color: #082925; cursor: pointer;
+    }
+  </style>
+
   <!--
     Immersive Geo Challenge V2
     No Google Maps API required.
@@ -625,6 +663,13 @@ body.team-mode .app,body.team-mode .overlay {display:none}
 </head>
 
 <body>
+  <section id="teamBoot" aria-label="Opening team game">
+    <div>
+      <h1>Opening team game…</h1>
+      <p id="teamBootMessage" role="status">Preparing your game screen. Please wait a moment.</p>
+      <button id="teamBootRetry" type="button" onclick="location.reload()" hidden>Reload</button>
+    </div>
+  </section>
   <div class="app">
     <header class="topbar">
       <section class="card header-card">
@@ -1199,6 +1244,7 @@ body.team-mode .app,body.team-mode .overlay {display:none}
      ***********************************************************************/
 
     function startGame(difficulty = "Easy") {
+      if (document.documentElement.dataset.entry === "join") return;
       selectedDifficulty = difficulty;
       selectedLevel = LEVELS[difficulty] || LEVELS.Easy;
 
@@ -3915,14 +3961,20 @@ var qrcode = function() {
   }
 
   function setup(isHost) {
+    // A learner link stays in the learner controls for this visit.
+    if (isHost && document.documentElement.dataset.entry === "join") return;
     host = isHost;
+    document.documentElement.dataset.entry = host ? "host" : "join";
     document.body.classList.add("team-mode"); show("teamView",true);
     show("joinFields",!host); show("difficultyField",host);
     say("setupTitle",host ? "Host Team Game" : "Join Team Game");
     say("enterRoom",host ? "Create room" : "Join room");
+    say("leaveTeam",host ? "Exit team game" : "Change room");
     el("roomCode").required = el("teamName").required = !host;
     el("roomCode").value = params.get("join") || "";
-    el("teamName").value = sessionStorage.getItem("geoTeamName") || "";
+    try { el("teamName").value = sessionStorage.getItem("geoTeamName") || ""; }
+    catch { el("teamName").value = ""; }
+    show("teamBoot",false);
     if (!host && el("roomCode").value) el("teamName").focus();
   }
   for (const difficulty of Object.keys(LEVELS)) {
@@ -3965,7 +4017,8 @@ var qrcode = function() {
     state = null; show("teamPlay",false); show("teamLobby",false);
     updateRoundCountdown("teamCountdown", 0, ROUND_TIME, { active: false, visible: false });
     countdownRoundKey = undefined;
-    error("This room has closed. Select Exit team game to return to the menu.");
+    error(host ? "This room has closed. Select Exit team game to return to the menu." :
+      "This room has closed. Select Change room to join another game.");
   }
   function failure(e) {
     error(/permission|denied/i.test(e.message) ?
@@ -4004,7 +4057,7 @@ var qrcode = function() {
         if (!myName) throw Error("Enter your team name.");
         await api.db.set(team,myName);
       }
-      sessionStorage.setItem("geoTeamName",myName);
+      try { sessionStorage.setItem("geoTeamName",myName); } catch { /* Joining works without browser storage. */ }
     }
     attach();
   }
@@ -4015,7 +4068,9 @@ var qrcode = function() {
       if (!connected) throw Error("Reconnect before closing this room.");
       await api.db.remove(room);
     }
-    const url = new URL(location.href); url.search = ""; location.assign(url.href);
+    const url = new URL(location.href); url.search = ""; url.hash = "";
+    if (!host) url.searchParams.set("join", "");
+    location.assign(url.href);
   });
 
   function prepareMap() {
@@ -4182,7 +4237,7 @@ var qrcode = function() {
   el("revealTeams").onclick = () => act(() => changePhase("reveal"));
   setInterval(refreshControls,350);
   if (params.has("join")) setup(false);
-  if (/^\d{6}$/.test(params.get("host") || "")) { setup(true); act(() => enter(true)); }
+  else if (/^\d{6}$/.test(params.get("host") || "")) { setup(true); act(() => enter(true)); }
 })();
 
 </script>
