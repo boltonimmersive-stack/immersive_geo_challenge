@@ -89,7 +89,7 @@
 
     .topbar {
       display: grid;
-      grid-template-columns: 2fr repeat(4, 1fr);
+      grid-template-columns: 2fr repeat(3, 1fr);
       gap: 14px;
     }
 
@@ -141,6 +141,84 @@
       font-size: clamp(1.6rem, 2.4vw, 2.35rem);
       font-weight: 800;
       line-height: 1;
+    }
+
+
+    /* Shared round countdown: the host and phones use the same room deadline. */
+    .round-countdown {
+      --countdown-colour: #42d68b;
+      flex: none;
+      padding: 8px 16px 14px;
+      margin: 0 0 14px;
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 16px;
+      background: rgba(3,12,25,.65);
+    }
+    .round-countdown[hidden] { display: none !important; }
+    .round-countdown[data-stage="amber"] { --countdown-colour: #ffbf47; }
+    .round-countdown[data-stage="red"] { --countdown-colour: #ff686d; }
+    .countdown-heading {
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .countdown-label {
+      color: #d4e0f2;
+      font-size: .82rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .countdown-status { display: block; margin-top: 5px; color: #aabbd4; font-size: .82rem; }
+    .countdown-readout { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+    .countdown-number {
+      display: inline-block;
+      min-width: 2ch;
+      text-align: right;
+      font-size: 2rem;
+      line-height: 1;
+      font-weight: 850;
+      font-variant-numeric: tabular-nums;
+      color: var(--countdown-colour);
+      transition: color .5s ease;
+    }
+    .countdown-unit { color: #aabbd4; font-size: .8rem; }
+    .countdown-track {
+      height: 20px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #233249;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,.3);
+    }
+    .countdown-fill {
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      background-color: var(--countdown-colour);
+      transition: width .35s linear, background-color .5s ease;
+    }
+    .round-countdown.is-urgent .countdown-number { font-size: 4rem; animation: countdown-pulse 1.3s ease-in-out infinite; }
+    .round-countdown.is-urgent .countdown-fill { animation: countdown-glow 1.3s ease-in-out infinite; }
+    .round-countdown.is-expired .countdown-number { font-size: 4rem; }
+    .round-countdown.is-resetting .countdown-fill,
+    .round-countdown.is-paused .countdown-fill { transition: none; }
+    .countdown-announcement {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    @keyframes countdown-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+    @keyframes countdown-glow { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }
+    @media (prefers-reduced-motion: reduce) {
+      .round-countdown .countdown-number,
+      .round-countdown .countdown-fill { animation: none !important; transition: none !important; }
     }
 
     .main {
@@ -565,11 +643,6 @@ body.team-mode .app,body.team-mode .overlay {display:none}
       </section>
 
       <section class="card stat-card">
-        <div class="label">Timer</div>
-        <div class="value" id="timerDisplay">90s</div>
-      </section>
-
-      <section class="card stat-card">
         <div class="label">Distance</div>
         <div class="value" id="distanceDisplay">—</div>
       </section>
@@ -587,6 +660,17 @@ body.team-mode .app,body.team-mode .overlay {display:none}
             <span class="pill">No Google API</span>
             <span class="pill">Touch-ready</span>
           </div>
+        </div>
+
+        <div class="round-countdown" id="roundCountdown" data-stage="green">
+          <div class="countdown-heading">
+            <div><span class="countdown-label">Round countdown</span><span class="countdown-status">Time remaining</span></div>
+            <div class="countdown-readout" aria-hidden="true"><strong class="countdown-number" id="timerDisplay">90</strong><span class="countdown-unit">sec</span></div>
+          </div>
+          <div class="countdown-track" role="progressbar" aria-label="Time remaining in this round" aria-valuemin="0" aria-valuemax="90" aria-valuenow="90" aria-valuetext="90 seconds remaining">
+            <div class="countdown-fill"></div>
+          </div>
+          <span class="countdown-announcement" role="status" aria-live="polite" aria-atomic="true"></span>
         </div>
 
         <div class="viewer-shell">
@@ -711,6 +795,8 @@ body.team-mode .app,body.team-mode .overlay {display:none}
 
     const TOTAL_ROUNDS = 5;
     const ROUND_TIME = 90; // seconds
+    const COUNTDOWN_WARNING_TIME = 30; // amber at 30 seconds
+    const COUNTDOWN_URGENT_TIME = 10; // red, large numbers and gentle pulse
 
     const LEVELS = {
       Easy: {
@@ -919,6 +1005,7 @@ body.team-mode .app,body.team-mode .overlay {display:none}
     let totalScore = 0;
     let timeLeft = ROUND_TIME;
     let timerInterval = null;
+    let roundDeadline = 0;
 
     let guessMarker = null;
     let actualMarker = null;
@@ -933,7 +1020,6 @@ body.team-mode .app,body.team-mode .overlay {display:none}
 
     const roundDisplay = document.getElementById("roundDisplay");
     const scoreDisplay = document.getElementById("scoreDisplay");
-    const timerDisplay = document.getElementById("timerDisplay");
     const distanceDisplay = document.getElementById("distanceDisplay");
     const statusBox = document.getElementById("statusBox");
     const submitBtn = document.getElementById("submitBtn");
@@ -1198,6 +1284,9 @@ body.team-mode .app,body.team-mode .overlay {display:none}
 
       roundSubmitted = true;
       clearInterval(timerInterval);
+      const secondsRemaining = Math.max(0, (roundDeadline - Date.now()) / 1000);
+      timeLeft = Math.ceil(secondsRemaining);
+      updateDisplays(secondsRemaining);
 
       submitBtn.disabled = true;
       nextBtn.disabled = false;
@@ -1269,6 +1358,7 @@ body.team-mode .app,body.team-mode .overlay {display:none}
 
     function endGame() {
       clearInterval(timerInterval);
+      updateRoundCountdown("roundCountdown", timeLeft, ROUND_TIME, { active: false });
 
       finalScoreDisplay.textContent = `${totalScore.toLocaleString()} points`;
       rankDisplay.textContent = getRank(totalScore);
@@ -1286,14 +1376,60 @@ body.team-mode .app,body.team-mode .overlay {display:none}
      * TIMER
      ***********************************************************************/
 
+    // Visual updates never own the deadline or change the scoring rules.
+    function updateRoundCountdown(id, seconds, duration, options = {}) {
+      const { active = true, visible = true, reset = false } = options;
+      const root = document.getElementById(id);
+      if (!root) return;
+      const total = Math.max(1, Number(duration) || 1);
+      const remaining = Math.min(total, Math.max(0, Number(seconds) || 0));
+      const rounded = Math.ceil(remaining);
+      const urgent = active && visible && remaining > 0 && rounded <= COUNTDOWN_URGENT_TIME;
+      const stage = rounded <= COUNTDOWN_URGENT_TIME ? "red" : rounded <= COUNTDOWN_WARNING_TIME ? "amber" : "green";
+      const track = root.querySelector(".countdown-track");
+      const announcement = root.querySelector(".countdown-announcement");
+
+      root.hidden = !visible;
+      root.dataset.stage = stage;
+      root.classList.toggle("is-urgent", urgent);
+      root.classList.toggle("is-expired", remaining === 0);
+      root.classList.toggle("is-paused", !active || !visible || remaining === 0);
+      root.classList.toggle("is-resetting", reset);
+      root.querySelector(".countdown-number").textContent = rounded;
+      root.querySelector(".countdown-fill").style.width = `${remaining / total * 100}%`;
+      root.querySelector(".countdown-status").textContent = remaining === 0 ? "Time’s up" :
+        !active ? "Guess submitted" : urgent ? "Final seconds" : "Time remaining";
+      track.setAttribute("aria-valuemax", total);
+      track.setAttribute("aria-valuenow", rounded);
+      track.setAttribute("aria-valuetext", remaining === 0 ? "Time is up" :
+        `${rounded} seconds remaining${active ? "" : "; countdown stopped"}`);
+
+      // Announce milestones, rather than interrupting screen readers every tick.
+      if (reset || !visible) {
+        delete root.dataset.announced;
+        announcement.textContent = "";
+      }
+      if (visible && remaining === 0 && root.dataset.announced !== "expired") {
+        announcement.textContent = "Time is up.";
+        root.dataset.announced = "expired";
+      } else if (urgent && !root.dataset.announced) {
+        announcement.textContent = `Final ${rounded} seconds.`;
+        root.dataset.announced = "urgent";
+      }
+    }
+
     function startTimer() {
       clearInterval(timerInterval);
-
+      // A deadline keeps the bar accurate after a background tab resumes.
+      roundDeadline = Date.now() + ROUND_TIME * 1000;
+      timeLeft = ROUND_TIME;
+      updateRoundCountdown("roundCountdown", ROUND_TIME, ROUND_TIME, { reset: true });
       timerInterval = setInterval(() => {
-        timeLeft--;
-        updateDisplays();
+        const secondsRemaining = Math.max(0, (roundDeadline - Date.now()) / 1000);
+        timeLeft = Math.ceil(secondsRemaining);
+        updateDisplays(secondsRemaining);
 
-        if (timeLeft <= 0) {
+        if (secondsRemaining === 0) {
           clearInterval(timerInterval);
 
           if (!currentGuess) {
@@ -1303,21 +1439,15 @@ body.team-mode .app,body.team-mode .overlay {display:none}
 
           submitGuess(true);
         }
-      }, 1000);
+      }, 100);
     }
 
-    function updateDisplays() {
+    function updateDisplays(secondsRemaining = timeLeft) {
       roundDisplay.textContent = `${Math.min(currentRound, gameLocations.length || TOTAL_ROUNDS)} / ${gameLocations.length || TOTAL_ROUNDS}`;
       scoreDisplay.textContent = totalScore.toLocaleString();
-      timerDisplay.textContent = `${timeLeft}s`;
-
-      if (timeLeft <= 10) {
-        timerDisplay.style.color = "var(--danger)";
-      } else if (timeLeft <= 25) {
-        timerDisplay.style.color = "var(--warning)";
-      } else {
-        timerDisplay.style.color = "white";
-      }
+      updateRoundCountdown("roundCountdown", secondsRemaining, ROUND_TIME, {
+        active: currentRound > 0 && !roundSubmitted
+      });
     }
 
     /***********************************************************************
@@ -1428,7 +1558,17 @@ body.team-mode .app,body.team-mode .overlay {display:none}
     <div id="hostInvite" hidden><p>Scan to join or open the game and choose <b>Join Team Game</b>.</p><div id="teamQR"></div><p>Room code <strong id="showCode"></strong></p><a id="joinLink">Open phone controller</a></div>
     <p id="lobbyNote"></p><ul id="roster"></ul><button id="beginRounds" class="team-primary" hidden>Start first round</button>
   </section>
-  <section id="teamPlay" hidden><header class="team-header"><h2 id="teamHeading"></h2><strong id="teamClock"></strong></header>
+  <section id="teamPlay" hidden><header class="team-header"><h2 id="teamHeading"></h2></header>
+    <div class="round-countdown" id="teamCountdown" data-stage="green" hidden>
+          <div class="countdown-heading">
+            <div><span class="countdown-label">Round countdown</span><span class="countdown-status">Time remaining</span></div>
+            <div class="countdown-readout" aria-hidden="true"><strong class="countdown-number" id="teamClock">90</strong><span class="countdown-unit">sec</span></div>
+          </div>
+          <div class="countdown-track" role="progressbar" aria-label="Time remaining in this round" aria-valuemin="0" aria-valuemax="90" aria-valuenow="90" aria-valuetext="90 seconds remaining">
+            <div class="countdown-fill"></div>
+          </div>
+          <span class="countdown-announcement" role="status" aria-live="polite" aria-atomic="true"></span>
+        </div>
     <div id="teamGrid"><div id="sceneSlot" hidden></div><div id="mapSlot"></div></div>
     <div class="team-panel"><p id="teamStatus" role="status"></p><div id="teamActions">
     <button id="lockPin" class="team-primary" hidden>Lock in guess</button><button id="revealTeams" class="team-primary" hidden>Reveal guesses</button>
@@ -3749,7 +3889,9 @@ var qrcode = function() {
   let host, api, user, room, roomCode, state, fullRoom, myName, connected = false;
   let clockOffset = 0, busy = false, sending = false, draft = null, saved = null;
   let drawing, watchedRound, stopGuess, sceneKey, revealKey;
-  const remaining = () => Math.max(0, Math.ceil(((state?.deadline || 0) - Date.now() - clockOffset) / 1000));
+  let countdownRoundKey;
+  const remainingSeconds = () => Math.max(0, ((state?.deadline || 0) - Date.now() - clockOffset) / 1000);
+  const remaining = () => Math.ceil(remainingSeconds());
   const child = path => api.db.child(room, path);
 
   async function connect() {
@@ -3821,6 +3963,8 @@ var qrcode = function() {
   }
   function closed() {
     state = null; show("teamPlay",false); show("teamLobby",false);
+    updateRoundCountdown("teamCountdown", 0, ROUND_TIME, { active: false, visible: false });
+    countdownRoundKey = undefined;
     error("This room has closed. Select Exit team game to return to the menu.");
   }
   function failure(e) {
@@ -3978,8 +4122,14 @@ var qrcode = function() {
   function refreshControls() {
     if (!state) return;
     const play = state.phase === "open";
-    const sec = remaining();
-    show("teamClock",play); if (play) say("teamClock",sec+"s");
+    const secondsRemaining = remainingSeconds();
+    const sec = Math.ceil(secondsRemaining);
+    updateRoundCountdown("teamCountdown", secondsRemaining, ROUND_TIME, {
+      active: play,
+      visible: play,
+      reset: play && countdownRoundKey !== state.roundKey
+    });
+    countdownRoundKey = play ? state.roundKey : undefined;
     el("beginRounds").disabled = busy || !connected || !Object.keys(fullRoom?.teams || {}).length;
     show("lockPin",!host && play); show("revealTeams",host && play);
     show("advanceTeams",host && state.phase === "reveal");
