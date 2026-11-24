@@ -656,7 +656,35 @@ body.team-mode .app,body.team-mode .overlay {display:none}
 #teamGrid {display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
 #teamGrid.host-grid {grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)}
 #teamGrid .viewer-shell,#teamGrid .map-shell {height:clamp(280px,48vh,650px);min-height:0}
-#teamScores li,#roster li {padding:.35em 0}
+#roster li {padding:.35em 0}
+.team-cards-header {display:flex;align-items:baseline;justify-content:space-between;gap:8px 20px;flex-wrap:wrap;margin-bottom:14px}
+.team-cards-header h3 {margin:0;font-size:1.1rem}
+.team-cards-header p {margin:0;color:#c5d5ec;font-size:.95rem}
+.team-cards {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:12px;list-style:none;margin:0;padding:0}
+.team-card {
+  --team-colour:#1266ce;--team-tint:#1266ce20;
+  min-width:0;position:relative;padding:16px 18px;
+  border:1px solid #52617a;border-left:6px solid var(--team-colour);border-radius:12px;
+  background:linear-gradient(120deg,var(--team-tint),transparent 85%),#101d34;
+  box-shadow:0 4px 12px #0002;
+}
+.team-card-name {margin:0 0 12px;font-size:1.12rem;line-height:1.25;overflow-wrap:anywhere}
+.team-card-score-label {color:#c5d5ec;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase}
+.team-card-score {display:flex;align-items:baseline;gap:6px;margin:3px 0 14px;font-variant-numeric:tabular-nums}
+.team-card-score strong {font-size:clamp(1.8rem,2.5vw,2.4rem);line-height:1;font-weight:800}
+.team-card-score span {font-size:.85rem;color:#c5d5ec}
+.team-card-status {display:inline-block;padding:6px 10px;border-radius:999px;background:#ffffff0c;border:1px solid #ffffff20;color:#dce6f5;font-size:.92rem;font-weight:700}
+.team-card.is-locked {border-top-color:#81e1b0;border-right-color:#81e1b0;border-bottom-color:#81e1b0}
+.team-card.is-locked .team-card-status {background:#163e32;border-color:#62b995;color:#bcf8d5}
+.team-card-detail {margin:10px 0 0;font-size:.9rem;line-height:1.5;color:#c5d5ec;overflow-wrap:anywhere}
+.team-card-locking {animation:team-lock-pop .55s ease-out both}
+.team-card-announcement {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@keyframes team-lock-pop {
+  0% {transform:translateY(0) scale(1);box-shadow:0 0 0 0 #81e1b055}
+  40% {transform:translateY(-3px) scale(1.025);box-shadow:0 0 0 5px #81e1b022}
+  100% {transform:translateY(0) scale(1);box-shadow:0 4px 12px #0002}
+}
+@media(prefers-reduced-motion:reduce){.team-card-locking{animation:none}}
 @media(max-width:760px){#teamGrid.host-grid{grid-template-columns:1fr}#teamGrid.host-grid .map-shell{height:260px}}
 
 </style>
@@ -1615,11 +1643,16 @@ body.team-mode .app,body.team-mode .overlay {display:none}
           </div>
           <span class="countdown-announcement" role="status" aria-live="polite" aria-atomic="true"></span>
         </div>
+    <section id="teamCardsPanel" class="team-panel" aria-labelledby="teamCardsHeading" hidden>
+      <div class="team-cards-header"><h3 id="teamCardsHeading">Team status</h3><p id="teamCardsSummary"></p></div>
+      <ol id="teamScores" class="team-cards"></ol>
+      <p id="teamCardsAnnouncement" class="team-card-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
+    </section>
     <div id="teamGrid"><div id="sceneSlot" hidden></div><div id="mapSlot"></div></div>
     <div class="team-panel"><p id="teamStatus" role="status"></p><div id="teamActions">
     <button id="lockPin" class="team-primary" hidden>Lock in guess</button><button id="revealTeams" class="team-primary" hidden>Reveal guesses</button>
     <button id="advanceTeams" class="team-primary" hidden>Next round</button></div>
-    <ol id="teamScores"></ol></div>
+    </div>
   </section>
 </section>
 
@@ -3936,6 +3969,8 @@ var qrcode = function() {
   let clockOffset = 0, busy = false, sending = false, draft = null, saved = null;
   let drawing, watchedRound, stopGuess, sceneKey, revealKey;
   let countdownRoundKey;
+  const teamCardNodes = new Map();
+  let teamCardSnapshot = "";
   const remainingSeconds = () => Math.max(0, ((state?.deadline || 0) - Date.now() - clockOffset) / 1000);
   const remaining = () => Math.ceil(remainingSeconds());
   const child = path => api.db.child(room, path);
@@ -4017,6 +4052,7 @@ var qrcode = function() {
     state = null; show("teamPlay",false); show("teamLobby",false);
     updateRoundCountdown("teamCountdown", 0, ROUND_TIME, { active: false, visible: false });
     countdownRoundKey = undefined;
+    resetTeamCards();
     error(host ? "This room has closed. Select Exit team game to return to the menu." :
       "This room has closed. Select Change room to join another game.");
   }
@@ -4126,6 +4162,101 @@ var qrcode = function() {
     }));
   }
   function rankings(board) {return Object.values(board || {}).sort((a,b) => b.total-a.total || a.name.localeCompare(b.name));}
+  function resetTeamCards() {
+    show("teamCardsPanel",false);
+    el("teamScores").replaceChildren();
+    say("teamCardsAnnouncement", "");
+    teamCardNodes.clear();
+    teamCardSnapshot = "";
+  }
+  function createTeamCard(id) {
+    const card = document.createElement("li");
+    card.className = "team-card";
+    card.dataset.teamId = id;
+    // Team names and values are inserted with textContent, never as HTML.
+    card.innerHTML = '<h4 class="team-card-name"></h4>' +
+      '<div class="team-card-score-label">Total score</div>' +
+      '<div class="team-card-score"><strong>0</strong><span>points</span></div>' +
+      '<span class="team-card-status"></span><p class="team-card-detail" hidden></p>';
+    card.addEventListener("animationend", e => {
+      if (e.target === card && e.animationName === "team-lock-pop") card.classList.remove("team-card-locking");
+    });
+    return card;
+  }
+  function renderTeamCards() {
+    const play = state?.phase === "open";
+    const finished = state?.phase === "finished";
+    // Live guesses remain on the host. Everyone sees the published results.
+    if (!state || state.phase === "lobby" || (play && !host)) {
+      if (teamCardNodes.size) resetTeamCards();
+      else show("teamCardsPanel",false);
+      return;
+    }
+    const board = state.board || {};
+    const entries = play ? Object.entries(fullRoom?.teams || {}).sort(([a],[b]) => a.localeCompare(b)) :
+      Object.entries(board).sort(([a,x],[b,y]) => y.total-x.total || x.name.localeCompare(y.name) || a.localeCompare(b));
+    const guesses = fullRoom?.guesses?.[state.roundKey] || {};
+    const expired = play && remaining() === 0;
+    const rows = entries.map(([id,entry],index) => {
+      const result = board[id] || {};
+      const guess = guesses[id];
+      const locked = play && guess?.locked === true;
+      const colour = /^#[0-9a-f]{6}$/i.test(result.colour || "") ? result.colour : colours[index % colours.length];
+      return {
+        id, name: play ? entry : result.name, colour,
+        total: Number(result.total) || 0, locked,
+        status: play ? locked ? "Locked in ✓" : expired ? "Time’s up" : "Choosing location…" :
+          finished ? "Final score" : "Round complete",
+        detail: play ? (expired && !locked ? guess ? "Last saved pin will count" : "No guess submitted" : "") :
+          finished ? "" : `+${(Number(result.points) || 0).toLocaleString()} points this round · ${result.pin ? formatDistance(result.distance) + " away" : "No guess"}`
+      };
+    });
+    const snapshot = JSON.stringify([state.phase,state.roundKey,rows]);
+    if (snapshot === teamCardSnapshot) return;
+    teamCardSnapshot = snapshot;
+    show("teamCardsPanel", rows.length > 0);
+    say("teamCardsHeading",play ? "Team status" : finished ? "Final scores" : "Round results");
+    say("teamCardsSummary",play ? rows.filter(row=>row.locked).length+" of "+rows.length+" teams locked in" :
+      rows.length+" team"+(rows.length === 1 ? "" : "s"));
+    const list = el("teamScores");
+    const activeIds = new Set(rows.map(row=>row.id));
+    for (const [id,card] of teamCardNodes) if (!activeIds.has(id)) {
+      card.remove(); teamCardNodes.delete(id);
+    }
+    const announcements = [];
+    rows.forEach((row,index) => {
+      let card = teamCardNodes.get(row.id);
+      if (!card) { card = createTeamCard(row.id); teamCardNodes.set(row.id,card); }
+      const sameRound = card.dataset.roundKey === state.roundKey;
+      const newlyLocked = play && row.locked && sameRound && card.dataset.locked === "false" &&
+        card.dataset.celebratedRound !== state.roundKey;
+      if (!sameRound || !play || !row.locked) card.classList.remove("team-card-locking");
+      if (!sameRound) delete card.dataset.celebratedRound;
+      card.dataset.roundKey = state.roundKey || "";
+      card.dataset.locked = String(row.locked);
+      card.classList.toggle("is-locked",row.locked);
+      card.style.setProperty("--team-colour",row.colour);
+      card.style.setProperty("--team-tint",row.colour+"20");
+      card.querySelector(".team-card-name").textContent = row.name;
+      card.querySelector(".team-card-score strong").textContent = row.total.toLocaleString();
+      card.querySelector(".team-card-status").textContent = row.status;
+      const detail = card.querySelector(".team-card-detail");
+      detail.textContent = row.detail; detail.hidden = !row.detail;
+      // Keep the same DOM node so ordinary Firebase updates cannot replay the animation.
+      if (list.children[index] !== card) list.insertBefore(card,list.children[index] || null);
+      if (newlyLocked) {
+        announcements.push(row.name);
+        if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+          card.classList.add("team-card-locking");
+          const round = card.dataset.roundKey;
+          setTimeout(() => { if (card.dataset.roundKey === round) card.classList.remove("team-card-locking"); }, 650);
+        }
+      }
+      if (row.locked) card.dataset.celebratedRound = state.roundKey;
+    });
+    say("teamCardsAnnouncement",announcements.length ? announcements.join(" and ")+" locked in." : "");
+  }
+
   function render() {
     const lobby = state.phase === "lobby";
     show("teamLobby",lobby); show("teamPlay",!lobby); show("hostInvite",host);
@@ -4158,14 +4289,6 @@ var qrcode = function() {
       pinAt(state.answer,"#172433",state.answer.name);
       map.fitBounds(bounds,{padding:[24,24],maxZoom:6});
     }
-    if (play && host) {
-      const guesses = fullRoom.guesses?.[state.roundKey] || {};
-      list("teamScores",Object.entries(fullRoom.teams || {}).map(([id,name]) =>
-        name+" · "+(guesses[id]?.locked ? "Locked in ✓" : "Deciding")));
-    } else if (play) list("teamScores",[]);
-    else list("teamScores",rankings(state.board).map(row =>
-      row.name+" · "+row.total.toLocaleString()+" total"+(finished ? "" :
-      " · "+(row.pin ? formatDistance(row.distance)+" away" : "No guess")+" · +"+row.points.toLocaleString())));
     if (!play) {
       const rows = rankings(state.board);
       say("teamStatus",finished ? "Winner"+(rows.filter(r=>r.total===rows[0]?.total).length>1?"s":"")+": "+
@@ -4191,6 +4314,7 @@ var qrcode = function() {
     say("advanceTeams",state.round === state.count ? "Final leaderboard" : "Next round");
     el("advanceTeams").disabled = busy || !connected;
     el("lockPin").disabled = sending || !draft || saved?.locked || !sec || !connected;
+    renderTeamCards();
     if (!play) return;
     const ids = Object.keys(fullRoom?.teams || {});
     const allLocked = ids.length && ids.every(id => fullRoom.guesses?.[state.roundKey]?.[id]?.locked);
